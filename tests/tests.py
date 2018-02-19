@@ -71,6 +71,7 @@ class TestRF(TestCase):
         self.rf_model = rf_model
 
     def test_feature_importance(self):
+        # check that there are 4 rows in the feature importance df (one for each feature)
         self.assertEqual(len(self.rf_model.eval._feature_importance), 4)
 
     def test_scores(self):
