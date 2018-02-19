@@ -7,17 +7,38 @@ from sklearn.preprocessing import Imputer
 MISSING_VALUE_FILLER = -1  # if imputation doesn't work fill with this
 
 
-def add_subtract_features(df, feature_list, error_on_missing_features=True):
+def add_subtract_features(df, feature_list, error_on_missing_features=False):
     for feature in feature_list:
         if feature not in df.columns:
             if error_on_missing_features:
                 raise Exception(
+                    'ERROR: %s feature dos not exist in this data set and is required for '
+                    'fitting. This will negatively affect the quality of these predictions.'
+                    % feature
+                )
+            else:
+                print(
                     'WARNING: %s feature dos not exist in this data set and is required for '
                     'fitting. This will negatively affect the quality of these predictions.'
                     % feature
                 )
             df[feature] = np.nan
     return df[feature_list]
+
+
+class NoImpute(object):
+    """No Impute option (still adds or removes columns)"""
+    def __init__(self):
+        self.features = None
+
+    def fit(self, features_df):
+        self.features = features_df.columns
+
+    def impute(self, features_df):
+        if self.features is None:
+            raise Exception('must fit before imputing')
+        features_df = add_subtract_features(features_df, self.features)
+        return features_df
 
 
 class ZeroFillImputer(object):
