@@ -1,11 +1,9 @@
-import sklearn
 import pandas as pd
 import numpy as np
 from sklearn import metrics
 from sklearn.model_selection import GridSearchCV, KFold
-from sklearn.model_selection import cross_validate
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+import seaborn as sns
 import copy
 import time
 
@@ -23,22 +21,29 @@ brier_scorer = metrics.make_scorer(
 )
 
 
-def simple_scorer(model, df, target_column, scoring=None):
+def simple_scorer(model, df, target_column, scoring=None, proba=True):
     scores = {'time': []}
     if scoring is None:
         scoring = {'roc_auc': metrics.roc_auc_score, 'brier': metrics.brier_score_loss}
-    X, y = model.split_and_impute(df, target_column, fit_imputer=False)
+    # X, y = model.split_and_impute(df, target_column, fit_imputer=False)
+    X, y = model.split(df, target_column)
+    X = model.preprocessor.process(X)
+    X = model.imputer.impute(X)
+
     start_time = time.time()
-    p = model.clf.predict_proba(X)
+    if proba:
+        p = model.clf.predict_proba(X)
+        ypred = [pi[1] for pi in p]
+    else:
+        ypred = model.clf.predict(X)
     end_time = time.time()
     scores['time'] = (end_time - start_time) / len(X)
-    yprob = [pi[1] for pi in p]
     for k, scorer in scoring.iteritems():
-        scores[k] = scorer(y, yprob)
+        scores[k] = scorer(y, ypred)
     return scores
 
 
-def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5):
+def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, seed=None):
     """Performs n split/fits scores the results to generate avg and std
         scores and feature importance.
         Note: feature importance is only available for random forest. Currently
@@ -55,32 +60,46 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5):
         'feature' (the feature name) and 'score' (the importance score).
 
     """
+    clf = copy.copy(model.clf)
+    if seed is not None:
+        clf.set_params(random_state=seed)
     scores = {'time': []}
+    if scoring == 'accuracy':
+        scoring = {'accuracy': metrics.accuracy_score}
+    if scoring == 'roc_auc':
+        scoring = {'roc_auc': metrics.roc_auc_score}
+    if scoring == 'brier':
+        scoring = {'brier': metrics.brier_score_loss}
     if scoring is None:
         scoring = {'roc_auc': metrics.roc_auc_score, 'brier': metrics.brier_score_loss}
-        for k, v in scoring.iteritems():
-            scores[k] = {'scores': []}
+    for k, v in scoring.iteritems():
+        scores[k] = {'scores': []}
     feature_score_sums = {}
-    X, y = model.split_and_impute(df, target_column, fit_imputer=True)
+    X, y = model.split(df, target_column)
+    X = model.preprocess_and_impute(X)
+
     for i in range(0, int(np.ceil(1.0 * nruns / cv))):
-        kf = KFold(n_splits=cv, shuffle=True)
-        for train_index, test_index in kf.split(df):
+        kf = KFold(n_splits=cv, shuffle=True, random_state=seed)
+        for train_index, test_index in kf.split(X):
             Xtrain, Xtest = X.iloc[train_index], X.iloc[test_index]
             ytrain, ytest = y.iloc[train_index], y.iloc[test_index]
-            model.clf.fit(Xtrain, ytrain)
+            clf.fit(Xtrain, ytrain)
             # get predicted scores on test set
             start_time = time.time()
-            p = model.clf.predict_proba(Xtest)
+            if proba:
+                p = clf.predict_proba(Xtest)
+                ypred = [pi[1] for pi in p]
+            else:
+                ypred = clf.predict(Xtest)
             end_time = time.time()
             scores['time'].append((end_time - start_time) / len(Xtest))
-            yprob = [pi[1] for pi in p]
             for k, scorer in scoring.iteritems():
-                scores[k]['scores'].append(scorer(ytest, yprob))
+                scores[k]['scores'].append(scorer(ytest, ypred))
 
             # TODO add more classifiers that include feature importance attribute to this list
-            if type(model.clf) in [sklearn.ensemble.forest.RandomForestClassifier]:
-                features = df.drop(target_column, axis=1).columns
-                importance_scores = model.clf.feature_importances_
+            if clf.__class__.__name__ in ['RandomForestClassifier', 'XGBClassifier']:
+                features = X.columns
+                importance_scores = clf.feature_importances_
                 for j in range(len(features)):
                     if features[j] in feature_score_sums:
                         feature_score_sums[features[j]] += importance_scores[j]
@@ -134,7 +153,7 @@ def plot_feature_drop(feature_drop_scores_df):
     feature_drop_scores_df['avg_score'].plot(yerr=feature_drop_scores_df['std_score'])
 
 
-def grid_search(model, traing_data, target_column, param_grid, scoring, n_jobs=-1):
+def grid_search(model, traing_df, target_column, param_grid, scoring, n_jobs=-1):
     """
         param_grid = {
             'n_estimators': [30, 100, 300],
@@ -144,7 +163,9 @@ def grid_search(model, traing_data, target_column, param_grid, scoring, n_jobs=-
         scoring = brier_scorer
     """
     clf_grid = GridSearchCV(model.clf, param_grid, n_jobs=n_jobs, scoring=scoring)
-    X, y = model.split_and_impute(traing_data, target_column, fit_imputer=True)
+    X, y = model.split(traing_df, target_column)
+    X = model.preprocessor.process(X)
+    X = model.imputer.impute(X)
     clf_grid.fit(X, y)
     return GridScores(clf_grid)
 
@@ -153,7 +174,7 @@ class GridScores(object):
     def __init__(self, clf_grid):
         self.clf_grid = clf_grid
 
-    def plot_heat_map(self, metric, title='', reduce_by=None, margins=True, ax=None):
+    def plot_heat_map(self, metric, title='', reduce_by='best', margins=False, ax=None):
         """
             metric: 'mean_test_score'
         """
@@ -168,18 +189,25 @@ class GridScores(object):
             f, ax = plt.subplots(3, figsize=(5, 12))
             i = 0
             for s in scores:
-                self._plot_heat_map(s['scores'], s['params'], title=s['title'], ax=ax[i])
+                self._plot_heat_map(
+                    s['scores'], s['params'],
+                    title=s['title'], ax=ax[i], margins=margins
+                )
                 plt.tight_layout()
                 i += 1
             return None
         self._plot_heat_map(values, params, title, margins, ax)
 
-    def _plot_heat_map(self, values, params, title='', margins=True, ax=None):
+    def _plot_heat_map(self, values, params, title='', margins=False, ax=None):
         """
             metric: 'mean_test_score'
         """
+        params = copy.deepcopy(params)
         xlabs = copy.deepcopy(params.keys())
-        x = copy.deepcopy(params.values())
+        xlabs.sort(reverse=True)
+        x = []
+        for xlab in xlabs:
+            x.append(params[xlab])
         values = values.copy()
         if values.ndim == 1:
             xlen = [len(xi) for xi in x]
@@ -196,18 +224,11 @@ class GridScores(object):
             x[1].append('avg')
         if ax is None:
             f, (ax) = plt.subplots(1)
-        im = ax.imshow(values, interpolation='nearest', cmap=plt.cm.hot)
-        ax.set_xlabel(xlabs[0])
-        ax.set_ylabel(xlabs[1])
-        ax.set_xticks(np.arange(len(x[0])))
-        ax.set_xticklabels(x[0])
-        ax.set_yticks(np.arange(len(x[1])))
-        ax.set_yticklabels(x[1])
+        values_df = pd.DataFrame(values, index=x[1], columns=x[0])
+        values_df.index.name = xlabs[1]
+        values_df.columns.name = xlabs[0]
+        sns.heatmap(values_df, annot=True, cmap=plt.cm.hot, ax=ax)
         ax.set_title(title)
-
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
-        plt.colorbar(im, cax=cax)
 
     def _get_score_margins(self, metric):
         values = copy.deepcopy(self.clf_grid.cv_results_[metric])
