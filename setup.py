@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='eightball',
-    version='0.0.2',
+    version='0.0.3',
     description='A machine learning classification toolbox.',
     author='Adam Hajari',
     author_email='adamhajari@gmail.com',
@@ -12,7 +12,8 @@ setup(
         "scikit-learn>=0.19.1",
         "pandas>=0.22.0",
         "numpy>=1.14.0",
-        "matplotlib>=2.1.2"
+        "matplotlib>=2.1.2",
+        "seaborn>=0.7.1"
     ],
     test_suite='nose.collector',
     tests_require=['nose']
