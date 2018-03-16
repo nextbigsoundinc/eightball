@@ -97,7 +97,11 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
                 scores[k]['scores'].append(scorer(ytest, ypred))
 
             # TODO add more classifiers that include feature importance attribute to this list
-            if clf.__class__.__name__ in ['RandomForestClassifier', 'XGBClassifier']:
+            clf_w_feature_importance = [
+                'RandomForestClassifier', 'XGBClassifier',
+                'ExtraTreesClassifier', 'GradientBoostingClassifier'
+            ]
+            if clf.__class__.__name__ in clf_w_feature_importance:
                 features = X.columns
                 importance_scores = clf.feature_importances_
                 for j in range(len(features)):
@@ -115,11 +119,13 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
     return Eval(scores, feature_importance_df)
 
 
-def feature_drop(model, df, target_column, scorer='brier', min_features=1):
+def feature_drop(model, df, target_column, scorer='brier',
+                 min_feature_count=1, min_feature_list=[], nruns=10):
     """ranks features by feature importance and successively drops features
         and fits/scores on the remaining feature set until there are
-        only min_features left. Scores are the average of 10 runs (currently
-        hardcoded).
+        only min_feature_count left. Note that if min_feature_count=1 and there
+        are 8 features in min_feature_list, feature drop will keep dropping until
+        until there are 8+1=9 features left. Scores are averaged over nruns.
 
     Args:
         df - dataframe of features and target variables
@@ -127,23 +133,29 @@ def feature_drop(model, df, target_column, scorer='brier', min_features=1):
         nruns - number of times to split and fit (default 10)
         scorer (str): must be one of the scorers available for the score_model
             method (brier by default)
+        min_feature_count (int): keep at least this many features in addition to
+            min_feature_list
+        min_feature_list (list): list of features to keep
 
     Returns:
         dataframe with columns 'n_features' (number of features used to fit/score),
-            'avg_score', and 'std_score'
+            'avg_score', 'std_score', and 'features' (list of features)
         TODO: update score_model method to allow for more scorers
     """
-    all_scores = {'n_features': [], 'avg_score': [], 'std_score': []}
-    scores = evaluate(model, df, target_column, nruns=10)
+    all_scores = {'n_features': [], 'avg_score': [], 'std_score': [], 'features': []}
+    scores = evaluate(model, df, target_column, nruns=nruns)
     feature_importance_df = scores._feature_importance
-    for i in range(0, len(feature_importance_df) - min_features + 1):
+    feature_importance_df = feature_importance_df\
+        .loc[~feature_importance_df['feature'].isin(min_feature_list), :]
+    for i in range(0, len(feature_importance_df) - min_feature_count + 1):
         features_to_drop = feature_importance_df\
             .sort_values(by='score').head(i)['feature'].tolist()
         df_dropped = df.drop(features_to_drop, axis=1).copy()
-        scores = evaluate(model, df_dropped, target_column, nruns=10)
+        scores = evaluate(model, df_dropped, target_column, nruns=nruns)
         all_scores['n_features'].append(len(df_dropped.columns))
         all_scores['avg_score'].append(scores._scores[scorer]['mean'])
         all_scores['std_score'].append(scores._scores[scorer]['std'])
+        all_scores['features'].append(df_dropped.columns)
     all_scores_df = pd.DataFrame(all_scores).set_index('n_features')
     return all_scores_df
 
@@ -153,7 +165,7 @@ def plot_feature_drop(feature_drop_scores_df):
     feature_drop_scores_df['avg_score'].plot(yerr=feature_drop_scores_df['std_score'])
 
 
-def grid_search(model, traing_df, target_column, param_grid, scoring, n_jobs=-1):
+def grid_search(model, traing_df, target_column, param_grid, scoring, cv=5, n_jobs=-1):
     """
         param_grid = {
             'n_estimators': [30, 100, 300],
@@ -162,7 +174,7 @@ def grid_search(model, traing_df, target_column, param_grid, scoring, n_jobs=-1)
         }
         scoring = brier_scorer
     """
-    clf_grid = GridSearchCV(model.clf, param_grid, n_jobs=n_jobs, scoring=scoring)
+    clf_grid = GridSearchCV(model.clf, param_grid, n_jobs=n_jobs, scoring=scoring, cv=cv)
     X, y = model.split(traing_df, target_column)
     X = model.preprocessor.process(X)
     X = model.imputer.impute(X)

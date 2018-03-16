@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='eightball',
-    version='0.0.4',
+    version='0.0.5',
     description='A machine learning classification toolbox.',
     author='Adam Hajari',
     author_email='adamhajari@gmail.com',
