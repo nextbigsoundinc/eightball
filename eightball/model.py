@@ -5,14 +5,20 @@ import copy
 import imputer
 import evaluation
 import preprocessor
-import param_search
+import param_optimization
+
+
+def load(path):
+    with open(path, 'rb') as model_file:
+        model = pickle.load(model_file)
+    return model
 
 
 class Model(object):
     """
         Model object for binary classifiers
     """
-    def __init__(self, clf, training_data, target_column, imputer_='zero', preprocessor_=None):
+    def __init__(self, clf, training_data, target_column, imputer_=None, preprocessor_=None):
         self.clf = clf
         self.training_data = training_data
         self.target_column = target_column
@@ -43,11 +49,11 @@ class Model(object):
             nruns: number of times runs (should be a multiple of cv)
             cv: number of cross validation folds
         """
-        self.eval = evaluation.evaluate(
+        self.eval_results = evaluation.evaluate(
             self, self.training_data, self.target_column,
             scoring=scoring, cv=cv, nruns=nruns, proba=proba, seed=seed
         )
-        return self.eval
+        return self.eval_results
 
     def score(self, df, target_column=None, scoring=None, proba=True):
         """score method for held out data set. fit must be called first. see evaluate
@@ -67,7 +73,7 @@ class Model(object):
             self.fit()
         return self.grid_scores
 
-    def param_search(self, param_bounds, scoring, n_jobs=-1, use_best=False, verbose=False):
+    def param_optimization(self, param_bounds, scoring, n_jobs=-1, use_best=False, verbose=False):
         """
             params_bounds is a dictionary that defines the paramaters of the search. the key
             is the parameter name and the value is a tuple of:
@@ -87,9 +93,9 @@ class Model(object):
             continue search smaller and smaller cubes of param values until it obtains the best
             score value for after searching with the min step size (5, 1, and 0.05 respectivley).
         """
-        self.param_search_results = param_search.ParamSearch(self, scoring)
-        self.param_search_results.search(param_bounds, verbose=verbose)
-        return self.param_search_results
+        self.param_optimization_results = param_optimization.ParamSearch(self, scoring)
+        self.param_optimization_results.search(param_bounds, verbose=verbose)
+        return self.param_optimization_results
 
     def fit(self):
         """
@@ -104,6 +110,8 @@ class Model(object):
     def predict(self, X, proba=True):
         X = self.preprocessor.process(X)
         X = self.imputer.impute(X)
+        X = X[self.feature_list]
+
         prediction_df = pd.DataFrame(index=X.index)
         if proba:
             p = self.clf.predict_proba(X)
@@ -116,7 +124,7 @@ class Model(object):
         model_copy = copy.copy(self)
         if store_data is False:
             del model_copy.training_data
-        pickle.dump(model_copy, open(path, "wb"))
+        pickle.dump(model_copy, open(path, "wb"), protocol=2)
         del model_copy
 
     def preprocess_and_impute(self, X):
