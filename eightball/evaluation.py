@@ -144,7 +144,7 @@ def feature_drop(model, df, target_column, scorer='brier',
     """
     all_scores = {'n_features': [], 'avg_score': [], 'std_score': [], 'features': []}
     scores = evaluate(model, df, target_column, nruns=nruns)
-    feature_importance_df = scores._feature_importance
+    feature_importance_df = scores.feature_importance_
     feature_importance_df = feature_importance_df\
         .loc[~feature_importance_df['feature'].isin(min_feature_list), :]
     for i in range(0, len(feature_importance_df) - min_feature_count + 1):
@@ -153,8 +153,8 @@ def feature_drop(model, df, target_column, scorer='brier',
         df_dropped = df.drop(features_to_drop, axis=1).copy()
         scores = evaluate(model, df_dropped, target_column, nruns=nruns)
         all_scores['n_features'].append(len(df_dropped.columns))
-        all_scores['avg_score'].append(scores._scores[scorer]['mean'])
-        all_scores['std_score'].append(scores._scores[scorer]['std'])
+        all_scores['avg_score'].append(scores.scores_[scorer]['mean'])
+        all_scores['std_score'].append(scores.scores_[scorer]['std'])
         all_scores['features'].append(df_dropped.columns)
     all_scores_df = pd.DataFrame(all_scores).set_index('n_features')
     return all_scores_df
@@ -318,24 +318,24 @@ class GridScores(object):
 
 class Eval(object):
     def __init__(self, scores, feature_importance=None):
-        self._scores = scores
-        self._feature_importance = feature_importance
+        self.scores_ = scores
+        self.feature_importance_ = feature_importance
 
     def print_scores(self):
-        for k, score in self._scores.iteritems():
+        for k, score in self.scores_.iteritems():
             if k != 'time':
                 print('%s: %s +/- %s' % (k, score['mean'], score['std']))
 
     def plot_feature_importance(self, topn=15, part_idxs=None):
         if part_idxs is not None:
-            parts = self._reduce_featuers(self._feature_importance, part_idxs)
+            parts = self._reduce_featuers(self.feature_importance_, part_idxs)
             reduced_scores = []
             for t in parts.keys():
-                cond = self._feature_importance['feature'].isin(parts[t])
-                reduced_scores.append(self._feature_importance.loc[cond, 'score'].mean())
+                cond = self.feature_importance_['feature'].isin(parts[t])
+                reduced_scores.append(self.feature_importance_.loc[cond, 'score'].mean())
             fetures_reduced_df = pd.DataFrame({'feature': parts.keys(), 'score': reduced_scores})
         else:
-            fetures_reduced_df = self._feature_importance
+            fetures_reduced_df = self.feature_importance_
 
         fetures_reduced_df\
             .sort_values(by='score')\
