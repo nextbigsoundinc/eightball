@@ -4,56 +4,75 @@ import re
 from sklearn.preprocessing import Imputer
 
 
-MISSING_VALUE_FILLER = -1  # if imputation doesn't work fill with this
+MISSING_VALUE_FILLER = 0  # if imputation doesn't work fill with this
 
 
-def add_subtract_features(df, feature_list, error_on_missing_features=False):
+def add_subtract_features(df, feature_list, on_missing='warn'):
     for feature in feature_list:
         if feature not in df.columns:
-            if error_on_missing_features:
+            if on_missing.lower() == 'error':
                 raise Exception(
                     'ERROR: %s feature dos not exist in this data set and is required for '
                     'fitting. This will negatively affect the quality of these predictions.'
                     % feature
                 )
-            else:
+            elif on_missing.lower() == 'warn':
                 print(
                     'WARNING: %s feature dos not exist in this data set and is required for '
                     'fitting. This will negatively affect the quality of these predictions.'
                     % feature
                 )
             df[feature] = np.nan
-    return df[feature_list]
+    return df[feature_list].copy()
 
 
 class NoImpute(object):
     """No Impute option (still adds or removes columns)"""
-    def __init__(self):
+    def __init__(self, on_missing='warn'):
         self.features = None
+        self._on_missing = on_missing
 
-    def fit(self, features_df):
-        self.features = features_df.columns
+    def fit(self, X):
+        self.features = X.columns
 
-    def impute(self, features_df):
+    def transform(self, X):
         if self.features is None:
             raise Exception('must fit before imputing')
-        features_df = add_subtract_features(features_df, self.features)
-        return features_df
+        X = add_subtract_features(X, self.features, on_missing=self._on_missing)
+        return X
 
 
-class ZeroFillImputer(object):
-    """Simple Imputer that just imputes missing values as 0"""
-    def __init__(self):
+class SimpleImputer(object):
+    """Simple Imputer"""
+    def __init__(self, type, axis=0, on_missing='warn'):
         self.features = None
+        self._type = type
+        self._axis = axis
+        self._on_missing = on_missing
 
-    def fit(self, features_df):
-        self.features = features_df.columns
+    def fit(self, X):
+        self.features = X.columns
+        if self._type in ['mean', 'median', 'most_frequent']:
+            self._imp = Imputer(strategy=self._type, axis=self._axis)
+            self._imp.fit(X)
 
-    def impute(self, features_df):
+    def transform(self, X):
         if self.features is None:
             raise Exception('must fit before imputing')
-        features_df = add_subtract_features(features_df, self.features)
-        return features_df.fillna(0)
+        X = add_subtract_features(X, self.features, on_missing=self._on_missing)
+        if self._type in ['mean', 'median', 'most_frequent']:
+            X_array = self._imp.transform(X)
+            X = pd.DataFrame(X_array, columns=X.columns, index=X.index)
+            return X
+        elif self._type == 'zero':
+            return X.fillna(0)
+        else:
+            raise(Exception(
+                'SimpleImputer must be of type "zero", "mean", "median", or "most_frequent"'
+            ))
+
+    def set_on_missing(self, on_missing):
+        self._on_missing = on_missing
 
 
 class NBSImputer(object):
@@ -66,7 +85,7 @@ class NBSImputer(object):
 
         Any rows missing all feature values are dropped. This can cause problems if
         you also have a target variable. In that case, in the dataframe passed to
-        the impute method include a columns for the target variable and specify the
+        the transform method include a columns for the target variable and specify the
         target_column name. A target column should not be included when fitting.
     """
 
@@ -112,7 +131,7 @@ class NBSImputer(object):
                 (avg, std) = self._get_mean_and_std(X[c], 'none')
                 self.features[c] = {'transform': 'none', 'mean': avg, 'std': std}
 
-    def impute(self, df):
+    def transform(self, df):
         # TODO check that self.imp and self.features are not None
         df_normalized = pd.DataFrame(index=df.index)
         df_isnan = pd.DataFrame(index=df.index)
