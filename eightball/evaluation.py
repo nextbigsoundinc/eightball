@@ -25,10 +25,8 @@ def simple_scorer(model, df, target_column, scoring=None, proba=True):
     scores = {'time': []}
     if scoring is None:
         scoring = {'roc_auc': metrics.roc_auc_score, 'brier': metrics.brier_score_loss}
-    # X, y = model.split_and_impute(df, target_column, fit_imputer=False)
     X, y = model.split(df, target_column)
-    X = model.preprocessor.process(X)
-    X = model.imputer.impute(X)
+    X = model.preprocess_and_impute(X)
 
     start_time = time.time()
     if proba:
@@ -60,12 +58,14 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
         'feature' (the feature name) and 'score' (the importance score).
 
     """
-    clf = copy.copy(model.clf)
+    clf = copy.deepcopy(model.clf)
+    modelcv = copy.deepcopy(model)
     if seed is not None:
         clf.set_params(random_state=seed)
     scores = {'time': []}
     if scoring == 'accuracy':
         scoring = {'accuracy': metrics.accuracy_score}
+        proba = False
     if scoring == 'roc_auc':
         scoring = {'roc_auc': metrics.roc_auc_score}
     if scoring == 'brier':
@@ -75,15 +75,19 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
     for k, v in scoring.iteritems():
         scores[k] = {'scores': []}
     feature_score_sums = {}
-    X, y = model.split(df, target_column)
-    X = model.preprocess_and_impute(X)
-
     for i in range(0, int(np.ceil(1.0 * nruns / cv))):
         kf = KFold(n_splits=cv, shuffle=True, random_state=seed)
-        for train_index, test_index in kf.split(X):
-            Xtrain, Xtest = X.iloc[train_index], X.iloc[test_index]
-            ytrain, ytest = y.iloc[train_index], y.iloc[test_index]
+        for train_index, test_index in kf.split(df):
+            df_train = df.iloc[train_index, :]
+            df_test = df.iloc[test_index, :]
+            modelcv.set_training_set(df_train, target_column)
+            Xtrain, ytrain = modelcv.split(df_train, target_column)
+            Xtest, ytest = modelcv.split(df_test, target_column)
+            Xtrain = modelcv.preprocess_and_impute(Xtrain)
+            Xtest = modelcv.preprocess_and_impute(Xtest)
+
             clf.fit(Xtrain, ytrain)
+            # REPLACE WITH: modelcv.fit()
             # get predicted scores on test set
             start_time = time.time()
             if proba:
@@ -102,7 +106,7 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
                 'ExtraTreesClassifier', 'GradientBoostingClassifier'
             ]
             if clf.__class__.__name__ in clf_w_feature_importance:
-                features = X.columns
+                features = Xtrain.columns
                 importance_scores = clf.feature_importances_
                 for j in range(len(features)):
                     if features[j] in feature_score_sums:
@@ -116,6 +120,7 @@ def evaluate(model, df, target_column, scoring=None, cv=5, nruns=5, proba=True, 
     for k, v in scoring.iteritems():
             scores[k]['mean'] = np.mean(scores[k]['scores'])
             scores[k]['std'] = np.std(scores[k]['scores'])
+    del modelcv
     return Eval(scores, feature_importance_df)
 
 
@@ -174,10 +179,15 @@ def grid_search(model, traing_df, target_column, param_grid, scoring, cv=5, n_jo
         }
         scoring = brier_scorer
     """
+    if scoring == 'accuracy':
+        scoring = metrics.make_scorer(metrics.accuracy_score)
+    if scoring == 'roc_auc':
+        scoring = metrics.make_scorer(metrics.roc_auc_score)
+    if scoring == 'brier':
+        scoring = brier_scorer
     clf_grid = GridSearchCV(model.clf, param_grid, n_jobs=n_jobs, scoring=scoring, cv=cv)
     X, y = model.split(traing_df, target_column)
-    X = model.preprocessor.process(X)
-    X = model.imputer.impute(X)
+    X = model.preprocess_and_impute(X)
     clf_grid.fit(X, y)
     return GridScores(clf_grid)
 
@@ -192,7 +202,9 @@ class GridScores(object):
         """
         values = self.clf_grid.cv_results_[metric]
         params = self.clf_grid.param_grid
-        if reduce_by is not None:
+        if len(self.clf_grid.param_grid) > 3:
+            raise(Exception('plotting for more than 3 parameters is not currently supported.'))
+        if reduce_by is not None and len(self.clf_grid.param_grid) == 3:
             if reduce_by == 'avg':
                 scores = self._get_score_margins(metric)
             elif reduce_by == 'best':
@@ -270,7 +282,7 @@ class GridScores(object):
             })
         return scores_marg
 
-    def plot(self, metric, title='', reduce_by=None, margins=True, ax=None):
+    def plot(self, metric, title='', reduce_by='best', margins=True, ax=None, error_bars=False):
         """
             metric: 'mean_score_time', 'n_estimators', etc.
         """
@@ -284,9 +296,13 @@ class GridScores(object):
             'std_test_score': self.clf_grid.cv_results_['std_test_score']
         })
         ylim = self._get_custom_plot_range(metrics_df, 'mean_test_score', 'std_test_score')
-        metrics_df.plot(
-            kind='scatter', y='mean_test_score', x=metric, yerr='std_test_score', ylim=ylim
-        )
+        if error_bars:
+            metrics_df.plot(
+                kind='scatter', y='mean_test_score', x=metric,
+                yerr='std_test_score', ylim=ylim
+            )
+        else:
+            metrics_df.plot(kind='scatter', y='mean_test_score', x=metric)
 
     def _get_custom_plot_range(self, df, field, err_field=None, margin=0.1):
         if err_field is not None:
