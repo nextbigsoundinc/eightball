@@ -132,11 +132,11 @@ class ParamSearch(object):
                 if self.scoring.values()[0].__name__ in ('accuracy_score'):
                     proba = False
             eval_results = self.model.evaluate(scoring=self.scoring, proba=proba, seed=self.seed)
-            score_type = eval_results._scores.keys()[0]
+            score_type = eval_results.scores_.keys()[0]
             if score_type in ['brier']:
-                score = -eval_results._scores[score_type]['mean']
+                score = -eval_results.scores_[score_type]['mean']
             else:
-                score = eval_results._scores[score_type]['mean']
+                score = eval_results.scores_[score_type]['mean']
             self.all_scores[params] = score
             return score
 
